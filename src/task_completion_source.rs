@@ -88,15 +88,18 @@ pub struct TaskCompletionFuture<T> {
     state: Arc<Mutex<SharedState<T>>>,
 }
 
-impl<T> Future for TaskCompletionFuture<T> {
+impl<T> Future for TaskCompletionFuture<T>
+where
+    T: Clone
+{
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut state = self.state.lock().unwrap();
 
         return if state.completed {
-            // Take the result and return it
-            Poll::Ready(state.result.take().expect("Result already taken"))
+            // Clone the result instead of taking it, so multiple futures can access it
+            Poll::Ready(state.result.clone().expect("Result already taken"))
         } else {
             // Store the waker for later notification
             state.waker = Some(ctx.waker().clone());
