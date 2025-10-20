@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 /// Shared state between TaskCompletionSource and its future
-struct SharedState<T> {
+struct CompletionSharedState<T> {
     result: Option<T>,
     waker: Option<Waker>,
     completed: bool,
@@ -17,7 +17,7 @@ struct SharedState<T> {
 /// the async context by calling `set_result()` or `set_exception()`.
 #[derive(Clone)]
 pub struct TaskCompletionSource<T> {
-    state: Arc<Mutex<SharedState<T>>>,
+    state: Arc<Mutex<CompletionSharedState<T>>>,
 }
 
 impl<T> TaskCompletionSource<T> {
@@ -25,7 +25,7 @@ impl<T> TaskCompletionSource<T> {
     #[inline]
     pub fn new() -> Self {
         return Self {
-            state: Arc::new(Mutex::new(SharedState {
+            state: Arc::new(Mutex::new(CompletionSharedState {
                 result: None,
                 waker: None,
                 completed: false,
@@ -85,12 +85,12 @@ impl<T> Default for TaskCompletionSource<T> {
 
 /// The future returned by TaskCompletionSource::task()
 pub struct TaskCompletionFuture<T> {
-    state: Arc<Mutex<SharedState<T>>>,
+    state: Arc<Mutex<CompletionSharedState<T>>>,
 }
 
 impl<T> Future for TaskCompletionFuture<T>
 where
-    T: Clone
+    T: Clone,
 {
     type Output = T;
 
