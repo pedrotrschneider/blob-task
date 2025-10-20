@@ -43,7 +43,7 @@ impl<T> TaskCompletionSource<T> {
 
     /// Completes the task with a successful result
     /// Returns true if the task was completed, false if already completed
-    pub fn set_result(&self, value: T) -> bool {
+    pub fn complete(&self, value: T) -> bool {
         let mut state = self.state.lock().unwrap();
 
         if state.completed {
@@ -123,7 +123,7 @@ mod tests {
         let task = tcs.task();
 
         // Complete it immediately
-        assert!(tcs.set_result(42));
+        assert!(tcs.complete(42));
 
         let result = task.await;
         assert_eq!(result, 42);
@@ -137,7 +137,7 @@ mod tests {
         let tcs_clone = tcs.clone();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(100));
-            tcs_clone.set_result(99);
+            tcs_clone.complete(99);
         });
 
         let result = task.await;
@@ -149,7 +149,7 @@ mod tests {
         let tcs = TaskCompletionSource::new();
 
         // Complete before creating the future
-        tcs.set_result(123);
+        tcs.complete(123);
 
         // Should still work
         let result = tcs.task().await;
@@ -162,7 +162,7 @@ mod tests {
         let task1 = tcs.task();
         let task2 = tcs.task();
 
-        tcs.set_result(50);
+        tcs.complete(50);
 
         let (r1, r2) = tokio::join!(task1, task2);
         assert_eq!(r1, 50);
@@ -173,8 +173,8 @@ mod tests {
     async fn set_result_returns_false_on_second_call() {
         let tcs = TaskCompletionSource::new();
 
-        assert!(tcs.set_result(1));
-        assert!(!tcs.set_result(2)); // Should return false
+        assert!(tcs.complete(1));
+        assert!(!tcs.complete(2)); // Should return false
 
         let result = tcs.task().await;
         assert_eq!(result, 1); // First value should be used
@@ -186,7 +186,7 @@ mod tests {
 
         assert!(!tcs.is_completed());
 
-        tcs.set_result(42);
+        tcs.complete(42);
 
         assert!(tcs.is_completed());
     }
@@ -197,7 +197,7 @@ mod tests {
 
         assert_eq!(tcs.try_get_result(), None);
 
-        tcs.set_result(42);
+        tcs.complete(42);
 
         assert_eq!(tcs.try_get_result(), Some(42));
     }
@@ -209,7 +209,7 @@ mod tests {
 
         tokio::spawn(async move {
             sleep(Duration::from_millis(50)).await;
-            tcs.set_result(String::from("hello"));
+            tcs.complete(String::from("hello"));
         });
 
         let result = task.await;
@@ -232,7 +232,7 @@ mod tests {
             name: String::from("test"),
         };
 
-        tcs.set_result(data.clone());
+        tcs.complete(data.clone());
 
         let result = task.await;
         assert_eq!(result, data);
@@ -245,7 +245,7 @@ mod tests {
         let task = tcs.task();
 
         // Complete from clone
-        tcs_clone.set_result(777);
+        tcs_clone.complete(777);
 
         let result = task.await;
         assert_eq!(result, 777);
@@ -260,7 +260,7 @@ mod tests {
         let handles: Vec<_> = (0..10)
             .map(|i| {
                 let tcs_clone = tcs.clone();
-                thread::spawn(move || tcs_clone.set_result(i))
+                thread::spawn(move || tcs_clone.complete(i))
             })
             .collect();
 
@@ -280,7 +280,7 @@ mod tests {
         let tcs: TaskCompletionSource<i32> = TaskCompletionSource::default();
         let task = tcs.task();
 
-        tcs.set_result(42);
+        tcs.complete(42);
 
         let result = task.await;
         assert_eq!(result, 42);
@@ -291,7 +291,7 @@ mod tests {
         let tcs = TaskCompletionSource::new();
         let task = tcs.task();
 
-        tcs.set_result(());
+        tcs.complete(());
 
         task.await;
         // If we get here, it worked
@@ -302,7 +302,7 @@ mod tests {
     async fn sequential_task_creations() {
         let tcs = TaskCompletionSource::new();
         println!("Hello before set result!");
-        tcs.set_result(100);
+        tcs.complete(100);
 
         // Create multiple tasks sequentially after completion
         println!("Hello before r1!");

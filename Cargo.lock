@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "blob-task"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -56,13 +63,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "tokio-test"
-version = "0.1.0"
-dependencies = [
- "tokio",
 ]
 
 [[package]]

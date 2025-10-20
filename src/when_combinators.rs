@@ -71,14 +71,6 @@ where
     }
 }
 
-/// Helper function to create a WhenAll combinator
-pub fn when_all<F>(futures: Vec<F>) -> WhenAll<F>
-where
-    F: Future,
-{
-    return WhenAll::new(futures);
-}
-
 /// Result of a WhenAny operation, containing the result and its index
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhenAnyResult<T> {
@@ -137,26 +129,18 @@ where
     }
 }
 
-/// Helper function to create a WhenAny combinator
-pub fn when_any<F>(futures: Vec<F>) -> WhenAny<F>
-where
-    F: Future,
-{
-    return WhenAny::new(futures);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::completed_task::CompletedTask;
-    use crate::delay_yield::Delay;
     use std::time::Duration;
+    use crate::TaskUtils;
 
     #[tokio::test]
     async fn when_all_with_completed_tasks() {
         let futures = vec![CompletedTask::new(1), CompletedTask::new(2), CompletedTask::new(3)];
 
-        let results = when_all(futures).await;
+        let results = TaskUtils::when_all(futures).await;
 
         assert_eq!(results, vec![1, 2, 3]);
     }
@@ -164,7 +148,7 @@ mod tests {
     #[tokio::test]
     async fn when_all_empty_vec() {
         let futures: Vec<CompletedTask<i32>> = vec![];
-        let results = when_all(futures).await;
+        let results = TaskUtils::when_all(futures).await;
 
         assert_eq!(results, Vec::<i32>::new());
     }
@@ -172,7 +156,7 @@ mod tests {
     #[tokio::test]
     async fn when_all_single_future() {
         let futures = vec![CompletedTask::new(42)];
-        let results = when_all(futures).await;
+        let results = TaskUtils::when_all(futures).await;
 
         assert_eq!(results, vec![42]);
     }
@@ -181,21 +165,21 @@ mod tests {
     async fn when_all_with_delays() {
         let futures = vec![
             Box::pin(async {
-                Delay::millis(50).await;
+                TaskUtils::wait_for_millis(50).await;
                 return 1;
             }) as Pin<Box<dyn Future<Output = i32> + Send>>,
             Box::pin(async {
-                Delay::millis(100).await;
+                TaskUtils::wait_for_millis(100).await;
                 return 2;
             }),
             Box::pin(async {
-                Delay::millis(25).await;
+                TaskUtils::wait_for_millis(25).await;
                 return 3;
             }),
         ];
 
         let start = std::time::Instant::now();
-        let results = when_all(futures).await;
+        let results = TaskUtils::when_all(futures).await;
         let elapsed = start.elapsed();
 
         assert_eq!(results, vec![1, 2, 3]);
@@ -211,7 +195,7 @@ mod tests {
             CompletedTask::new(String::from("world")),
         ];
 
-        let results = when_all(futures).await;
+        let results = TaskUtils::when_all(futures).await;
 
         assert_eq!(results, vec![String::from("hello"), String::from("world")]);
     }
@@ -220,20 +204,20 @@ mod tests {
     async fn when_all_preserves_order() {
         let futures = vec![
             Box::pin(async {
-                Delay::millis(100).await;
+                TaskUtils::wait_for_millis(100).await;
                 return 1;
             }) as Pin<Box<dyn Future<Output = i32> + Send>>,
             Box::pin(async {
-                Delay::millis(50).await;
+                TaskUtils::wait_for_millis(50).await;
                 return 2;
             }),
             Box::pin(async {
-                Delay::millis(75).await;
+                TaskUtils::wait_for_millis(75).await;
                 return 3;
             }),
         ];
 
-        let results = when_all(futures).await;
+        let results = TaskUtils::when_all(futures).await;
 
         // Despite different completion times, order is preserved
         assert_eq!(results, vec![1, 2, 3]);
@@ -243,7 +227,7 @@ mod tests {
     async fn when_any_with_completed_tasks() {
         let futures = vec![CompletedTask::new(1), CompletedTask::new(2), CompletedTask::new(3)];
 
-        let result = when_any(futures).await;
+        let result = TaskUtils::when_any(futures).await;
 
         // First one should complete (but any is valid)
         assert_eq!(result.index, 0);
@@ -253,7 +237,7 @@ mod tests {
     #[tokio::test]
     async fn when_any_single_future() {
         let futures = vec![CompletedTask::new(42)];
-        let result = when_any(futures).await;
+        let result = TaskUtils::when_any(futures).await;
 
         assert_eq!(result.index, 0);
         assert_eq!(result.result, 42);
@@ -263,21 +247,21 @@ mod tests {
     async fn when_any_returns_fastest() {
         let futures = vec![
             Box::pin(async {
-                Delay::millis(100).await;
+                TaskUtils::wait_for_millis(100).await;
                 return 1;
             }) as Pin<Box<dyn Future<Output = i32> + Send>>,
             Box::pin(async {
-                Delay::millis(25).await;
+                TaskUtils::wait_for_millis(25).await;
                 return 2;
             }),
             Box::pin(async {
-                Delay::millis(50).await;
+                TaskUtils::wait_for_millis(50).await;
                 return 3;
             }),
         ];
 
         let start = std::time::Instant::now();
-        let result = when_any(futures).await;
+        let result = TaskUtils::when_any(futures).await;
         let elapsed = start.elapsed();
 
         // Should return the fastest (index 1, value 2)
@@ -294,7 +278,7 @@ mod tests {
             CompletedTask::new(String::from("second")),
         ];
 
-        let result = when_any(futures).await;
+        let result = TaskUtils::when_any(futures).await;
 
         assert_eq!(result.index, 0);
         assert_eq!(result.result, String::from("first"));
@@ -323,7 +307,7 @@ mod tests {
     async fn when_all_with_unit_type() {
         let futures = vec![CompletedTask::new(()), CompletedTask::new(()), CompletedTask::new(())];
 
-        let results = when_all(futures).await;
+        let results = TaskUtils::when_all(futures).await;
 
         assert_eq!(results.len(), 3);
     }
@@ -367,7 +351,7 @@ mod tests {
             }),
         ];
 
-        let results = when_all(futures).await;
+        let results = TaskUtils::when_all(futures).await;
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].id, 1);
@@ -378,20 +362,20 @@ mod tests {
     async fn when_any_with_different_completion_times() {
         let futures = vec![
             Box::pin(async {
-                Delay::millis(200).await;
+                TaskUtils::wait_for_millis(200).await;
                 return "slow";
             }) as Pin<Box<dyn Future<Output = &str> + Send>>,
             Box::pin(async {
-                Delay::millis(50).await;
+                TaskUtils::wait_for_millis(50).await;
                 return "fast";
             }),
             Box::pin(async {
-                Delay::millis(300).await;
+                TaskUtils::wait_for_millis(300).await;
                 return "slowest";
             }),
         ];
 
-        let result = when_any(futures).await;
+        let result = TaskUtils::when_any(futures).await;
 
         assert_eq!(result.result, "fast");
         assert_eq!(result.index, 1);
@@ -401,7 +385,7 @@ mod tests {
     async fn when_all_large_number_of_futures() {
         let futures: Vec<_> = (0..100).map(|i| CompletedTask::new(i)).collect();
 
-        let results = when_all(futures).await;
+        let results = TaskUtils::when_all(futures).await;
 
         assert_eq!(results.len(), 100);
         assert_eq!(results[0], 0);
@@ -412,7 +396,7 @@ mod tests {
     async fn when_any_large_number_of_futures() {
         let futures: Vec<_> = (0..100).map(|i| CompletedTask::new(i)).collect();
 
-        let result = when_any(futures).await;
+        let result = TaskUtils::when_any(futures).await;
 
         assert_eq!(result.index, 0);
         assert_eq!(result.result, 0);
@@ -422,24 +406,24 @@ mod tests {
     async fn when_all_mixed_delay_times() {
         let futures = vec![
             Box::pin(async {
-                Delay::millis(30).await;
+                TaskUtils::wait_for_millis(30).await;
                 return 1;
             }) as Pin<Box<dyn Future<Output = i32> + Send>>,
             Box::pin(async {
-                Delay::millis(60).await;
+                TaskUtils::wait_for_millis(60).await;
                 return 2;
             }),
             Box::pin(async {
-                Delay::millis(45).await;
+                TaskUtils::wait_for_millis(45).await;
                 return 3;
             }),
             Box::pin(async {
-                Delay::millis(15).await;
+                TaskUtils::wait_for_millis(15).await;
                 return 4;
             }),
         ];
 
-        let results = when_all(futures).await;
+        let results = TaskUtils::when_all(futures).await;
 
         // Order preserved despite different times
         assert_eq!(results, vec![1, 2, 3, 4]);

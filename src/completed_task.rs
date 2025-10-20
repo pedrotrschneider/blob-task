@@ -12,11 +12,6 @@ impl<T> CompletedTask<T> {
     pub fn new(value: T) -> Self {
         Self(Some(value))
     }
-
-    #[inline]
-    fn from_result(value: T) -> Self {
-        return Self::new(value);
-    }
 }
 
 impl<T> Future for CompletedTask<T> {
@@ -40,6 +35,7 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    use crate::TaskUtils;
 
     // Helper to create a dummy waker for testing
     fn dummy_waker() -> Waker {
@@ -86,7 +82,7 @@ mod tests {
 
     #[test]
     fn from_result_helper() {
-        let mut task = CompletedTask::from_result(100);
+        let mut task = TaskUtils::completed_task(100);
         let waker = dummy_waker();
         let mut ctx = Context::from_waker(&waker);
 
@@ -116,7 +112,7 @@ mod tests {
 
     #[tokio::test]
     async fn from_result_in_async_context() {
-        let result = CompletedTask::from_result("test").await;
+        let result = TaskUtils::completed_task("test").await;
         assert_eq!(result, "test");
     }
 

@@ -1,4 +1,3 @@
-// object_pool.rs
 use std::sync::{Arc, Mutex};
 
 /// A thread-safe object pool for reusing allocations.
@@ -290,8 +289,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn basic_pool_rent_and_return() {
@@ -301,6 +300,10 @@ mod tests {
             let mut obj = pool.rent();
             obj.push(1);
             obj.push(2);
+            
+            assert_eq!(obj.len(), 2);
+            assert_eq!(obj.get(0), Some(&1));
+            assert_eq!(obj.get(1), Some(&2));
         } // obj is automatically returned to pool
 
         assert_eq!(pool.available(), 1);
@@ -429,11 +432,7 @@ mod tests {
 
     #[test]
     fn pool_with_reset_capacity() {
-        let pool = ObjectPoolWithReset::with_capacity(
-            || Vec::<i32>::new(),
-            |v| v.clear(),
-            2,
-        );
+        let pool = ObjectPoolWithReset::with_capacity(|| Vec::<i32>::new(), |v| v.clear(), 2);
 
         {
             let _obj1 = pool.rent();
@@ -459,10 +458,7 @@ mod tests {
 
     #[test]
     fn pool_with_reset_clone() {
-        let pool = ObjectPoolWithReset::new(
-            || Vec::<i32>::new(),
-            |v| v.clear(),
-        );
+        let pool = ObjectPoolWithReset::new(|| Vec::<i32>::new(), |v| v.clear());
 
         {
             let _obj = pool.rent();
@@ -500,7 +496,6 @@ mod tests {
         assert!(pool.available() >= 1 && pool.available() <= 2);
     }
 
-
     #[test]
     fn pool_with_custom_type() {
         #[derive(Default)]
@@ -530,10 +525,7 @@ mod tests {
 
     #[test]
     fn pool_with_reset_multiple_cycles() {
-        let pool = ObjectPoolWithReset::new(
-            || Vec::<i32>::new(),
-            |v| v.clear(),
-        );
+        let pool = ObjectPoolWithReset::new(|| Vec::<i32>::new(), |v| v.clear());
 
         for i in 0..5 {
             let mut obj = pool.rent();
@@ -546,10 +538,7 @@ mod tests {
 
     #[test]
     fn pooled_object_with_reset_take() {
-        let pool = ObjectPoolWithReset::new(
-            || Vec::<i32>::new(),
-            |v| v.clear(),
-        );
+        let pool = ObjectPoolWithReset::new(|| Vec::<i32>::new(), |v| v.clear());
 
         let mut obj = pool.rent();
         obj.push(1);
@@ -596,10 +585,7 @@ mod tests {
 
     #[test]
     fn pool_with_reset_clear() {
-        let pool = ObjectPoolWithReset::new(
-            || Vec::<i32>::new(),
-            |v| v.clear(),
-        );
+        let pool = ObjectPoolWithReset::new(|| Vec::<i32>::new(), |v| v.clear());
 
         {
             let _obj1 = pool.rent();

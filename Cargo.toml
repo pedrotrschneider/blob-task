@@ -1,10 +1,10 @@
 [package]
-name = "tokio-test"
+name = "blob-task"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "1.48.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 
 [dev-dependencies]
-tokio = { version = "1.48.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "rt-multi-thread"] }

@@ -18,18 +18,6 @@ impl Delay {
             sleep: Box::pin(sleep(duration)),
         };
     }
-
-    /// Creates a delay from milliseconds
-    #[inline]
-    pub fn millis(millis: u64) -> Self {
-        return Self::new(Duration::from_millis(millis));
-    }
-
-    /// Creates a delay from seconds
-    #[inline]
-    pub fn seconds(secs: u64) -> Self {
-        return Self::new(Duration::from_secs(secs));
-    }
 }
 
 impl Future for Delay {
@@ -115,11 +103,12 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
     use tokio::time::Duration;
+    use crate::TaskUtils;
 
     #[tokio::test]
     async fn delay_completes_after_duration() {
         let start = Instant::now();
-        Delay::millis(100).await;
+        TaskUtils::wait_for_millis(100).await;
         let elapsed = start.elapsed();
 
         // Allow some tolerance for timing
@@ -130,7 +119,7 @@ mod tests {
     #[tokio::test]
     async fn delay_from_secs() {
         let start = Instant::now();
-        Delay::seconds(1).await;
+        TaskUtils::wait_for_seconds(1).await;
         let elapsed = start.elapsed();
 
         assert!(elapsed >= Duration::from_millis(950));
@@ -150,7 +139,7 @@ mod tests {
     #[tokio::test]
     async fn delay_millis_method() {
         let start = Instant::now();
-        Delay::millis(75).await;
+        TaskUtils::wait_for_millis(75).await;
         let elapsed = start.elapsed();
 
         assert!(elapsed >= Duration::from_millis(70));
@@ -160,7 +149,7 @@ mod tests {
     #[tokio::test]
     async fn delay_seconds_method() {
         let start = Instant::now();
-        Delay::seconds(1).await;
+        TaskUtils::wait_for_seconds(1).await;
         let elapsed = start.elapsed();
 
         assert!(elapsed >= Duration::from_millis(950));
@@ -169,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn yield_now_completes() {
-        Yield::new().await;
+        TaskUtils::yield_once().await;
         // If we get here, it worked
         assert!(true);
     }
@@ -182,7 +171,7 @@ mod tests {
         let func = async move |c: Arc<AtomicUsize>| {
             for _ in 0..5 {
                 c.fetch_add(1, Ordering::SeqCst);
-                Yield::new().await;
+                TaskUtils::yield_once().await;
             }
         };
 
@@ -203,7 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn yield_many_completes() {
-        YieldMany::new(5).await;
+        TaskUtils::yield_many(5).await;
         assert!(true);
     }
 
@@ -211,7 +200,7 @@ mod tests {
     async fn yield_many_yields_correct_count() {
         // Simply await YieldMany and verify it completes
         // The implementation ensures it yields the correct number of times
-        YieldMany::new(3).await;
+        TaskUtils::yield_many(3).await;
 
         // If we got here, it completed successfully
         // This tests that yielding 3 times doesn't hang or panic
@@ -220,7 +209,7 @@ mod tests {
 
     #[tokio::test]
     async fn yield_many_with_zero_completes_immediately() {
-        YieldMany::new(0).await;
+        TaskUtils::yield_many(0).await;
         assert!(true);
     }
 
@@ -228,9 +217,9 @@ mod tests {
     async fn multiple_delays_in_sequence() {
         let start = Instant::now();
 
-        Delay::millis(50).await;
-        Delay::millis(50).await;
-        Delay::millis(50).await;
+        TaskUtils::wait_for_millis(50).await;
+        TaskUtils::wait_for_millis(50).await;
+        TaskUtils::wait_for_millis(50).await;
 
         let elapsed = start.elapsed();
 
@@ -244,7 +233,7 @@ mod tests {
 
         let func = async move |c: Arc<AtomicUsize>| {
             c.fetch_add(1, Ordering::SeqCst);
-            Delay::millis(50).await;
+            TaskUtils::wait_for_millis(50).await;
             c.fetch_add(1, Ordering::SeqCst);
         };
 
@@ -286,10 +275,10 @@ mod tests {
     async fn interleaved_yields_and_delays() {
         let start = Instant::now();
 
-        Yield::new().await;
-        Delay::millis(50).await;
-        Yield::new().await;
-        Delay::millis(50).await;
+        TaskUtils::yield_once().await;
+        TaskUtils::wait_for_millis(50).await;
+        TaskUtils::yield_once().await;
+        TaskUtils::wait_for_millis(50).await;
 
         let elapsed = start.elapsed();
 
@@ -319,7 +308,7 @@ mod tests {
     async fn concurrent_delays() {
         let start = Instant::now();
 
-        let (_, _, _) = tokio::join!(Delay::millis(100), Delay::millis(100), Delay::millis(100),);
+        let (_, _, _) = tokio::join!(TaskUtils::wait_for_millis(100), TaskUtils::wait_for_millis(100), TaskUtils::wait_for_millis(100),);
 
         let elapsed = start.elapsed();
 
@@ -334,7 +323,7 @@ mod tests {
         for i in 0..100 {
             sum += i;
             if i % 10 == 0 {
-                Yield::new().await;
+                TaskUtils::yield_once().await;
             }
         }
         assert_eq!(sum, 4950);
@@ -346,7 +335,7 @@ mod tests {
 
         let func = async move |c: Arc<AtomicUsize>| {
             c.fetch_add(1, Ordering::SeqCst);
-            YieldMany::new(3).await;
+            TaskUtils::yield_many(3).await;
             c.fetch_add(1, Ordering::SeqCst);
         };
 
