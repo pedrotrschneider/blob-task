@@ -7,9 +7,10 @@ mod task_completion_source;
 mod task_utils;
 mod when_combinators;
 mod block_forget;
+mod waiters;
 
-pub use blob_task::*;
-pub use block_forget::*;
+pub use blob_task::{BlobTask, ToBlobTaskExt};
+pub use block_forget::{Block, Forget};
 pub use cancellation_token::{CancellationFuture, CancellationToken};
 pub use completed_task::CompletedTask;
 pub use delay_yield::{Delay, Yield, YieldMany};
@@ -17,3 +18,4 @@ pub use object_pool::{ObjectPool, ObjectPoolWithReset, PooledObject, PooledObjec
 pub use task_completion_source::{TaskCompletionFuture, TaskCompletionSource};
 pub use task_utils::*;
 pub use when_combinators::{WhenAll, WhenAny, WhenAnyResult};
+pub use waiters::{WaitUntil, WaitWhile};
