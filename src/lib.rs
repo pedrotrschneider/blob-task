@@ -7,8 +7,9 @@ mod object_pool;
 mod task_completion_source;
 mod task_utils;
 mod timeout;
-mod waiters;
+mod wait_until_while;
 mod when_combinators;
+mod wait_value_changed;
 
 pub use blob_task::{BlobTask, ToBlobTaskExt};
 pub use block_forget::{Block, Forget};
@@ -19,5 +20,6 @@ pub use object_pool::{ObjectPool, ObjectPoolWithReset, PooledObject, PooledObjec
 pub use task_completion_source::{TaskCompletionFuture, TaskCompletionSource};
 pub use task_utils::*;
 pub use timeout::{Timeout, TimeoutError, TimeoutExt};
-pub use waiters::{WaitUntil, WaitWhile};
+pub use wait_until_while::{WaitUntil, WaitWhile};
 pub use when_combinators::{WhenAll, WhenAny, WhenAnyResult};
+pub use wait_value_changed::{WaitForValueChanged, WaitForValueEquals};

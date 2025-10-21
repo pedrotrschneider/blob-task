@@ -1,5 +1,5 @@
-use crate::waiters::{WaitUntil, WaitWhile};
-use crate::{CancellationToken, CompletedTask, Delay, TaskCompletionSource, Yield, YieldMany};
+use crate::wait_until_while::{WaitUntil, WaitWhile};
+use crate::{CancellationToken, CompletedTask, Delay, TaskCompletionSource, WaitForValueChanged, WaitForValueEquals, Yield, YieldMany};
 use std::time::Duration;
 
 #[inline]
@@ -82,7 +82,7 @@ pub fn task_completion_source<T>() -> TaskCompletionSource<T> {
     return TaskCompletionSource::new();
 }
 
-/// waiters.rs utils
+/// wait_until_while utils
 
 #[inline]
 pub fn wait_until<F>(predicate: F) -> WaitUntil<F>
@@ -98,4 +98,26 @@ where
     F: Fn() -> bool,
 {
     return WaitWhile::new(predicate);
+}
+
+/// wait_value_changed.rs utils
+
+/// Helper function to wait for a value to change from its initial state
+#[inline]
+pub fn wait_for_value_changed<F, T>(getter: F, initial_value: T) -> WaitForValueChanged<F, T>
+where
+    F: Fn() -> T,
+    T: PartialEq,
+{
+    return WaitForValueChanged::new(getter, initial_value);
+}
+
+/// Helper function to wait for a value to equal a specific target
+#[inline]
+pub fn wait_for_value_equals<F, T>(getter: F, target_value: T) -> WaitForValueEquals<F, T>
+where
+    F: Fn() -> T,
+    T: PartialEq,
+{
+    return WaitForValueEquals::new(getter, target_value);
 }
