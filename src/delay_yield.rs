@@ -1,31 +1,85 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
-use tokio::time::{Sleep, sleep};
+use tokio::runtime::{Handle, Runtime};
+use tokio::time::Sleep;
+
+/// State for a Delay
+struct DelayState {
+    sleep: Option<Pin<Box<Sleep>>>,
+    duration: Duration,
+    wakers: Vec<Waker>,
+    completed: bool,
+}
+
+pub struct Delay {
+    state: Arc<Mutex<DelayState>>,
+}
 
 /// A future that completes after a specified duration.
 /// Thin wrapper around tokio::time::sleep for consistency with the library's API.
-pub struct Delay {
-    sleep: Pin<Box<Sleep>>,
-}
-
 impl Delay {
-    /// Creates a new delay that completes after the specified duration
-    #[inline]
+    /// Create a new delay (safe outside a runtime)
     pub fn new(duration: Duration) -> Self {
-        return Self {
-            sleep: Box::pin(sleep(duration)),
-        };
+        Self {
+            state: Arc::new(Mutex::new(DelayState {
+                sleep: None,
+                duration,
+                wakers: Vec::new(),
+                completed: false,
+            })),
+        }
+    }
+
+    /// Spawn the timer if needed
+    fn spawn_if_needed(&self) {
+        let mut state = self.state.lock().unwrap();
+        if state.sleep.is_none() && !state.completed {
+            let duration = state.duration;
+            let state_clone = self.state.clone();
+
+            // Lazy creation: spawn on a runtime
+            if let Ok(_) = Handle::try_current() {
+                state.sleep = Some(Box::pin(tokio::time::sleep(duration)));
+            } else {
+                // No runtime -> spawn a thread with runtime
+                std::thread::spawn(move || {
+                    let rt = Runtime::new().expect("Failed to create Tokio runtime");
+                    let sleep_future = tokio::time::sleep(duration);
+                    rt.block_on(async move {
+                        sleep_future.await;
+                        let mut state = state_clone.lock().unwrap();
+                        state.completed = true;
+                        for w in state.wakers.drain(..) {
+                            w.wake();
+                        }
+                    });
+                });
+            }
+        }
     }
 }
 
 impl Future for Delay {
     type Output = ();
 
-    #[inline]
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
-        return self.sleep.as_mut().poll(ctx);
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.spawn_if_needed();
+
+        let mut state = self.state.lock().unwrap();
+
+        if state.completed {
+            Poll::Ready(())
+        } else if let Some(sleep) = &mut state.sleep {
+            // Poll the sleep future if it exists
+            Pin::new(sleep).poll(cx)
+        } else {
+            // Sleep not yet spawned → register waker
+            state.wakers.push(cx.waker().clone());
+            Poll::Pending
+        }
     }
 }
 
