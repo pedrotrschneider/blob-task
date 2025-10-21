@@ -300,7 +300,7 @@ mod tests {
             let mut obj = pool.rent();
             obj.push(1);
             obj.push(2);
-            
+
             assert_eq!(obj.len(), 2);
             assert_eq!(obj.get(0), Some(&1));
             assert_eq!(obj.get(1), Some(&2));

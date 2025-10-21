@@ -4,9 +4,14 @@ use std::task::{Context, Poll};
 
 /// A future that is immediately ready with a value.
 /// Zero-allocation, always completes on first poll.
-pub struct CompletedTask<T>(Option<T>);
+pub struct CompletedTask<T>(Option<T>)
+where
+    T: Clone + Send + 'static;
 
-impl<T> CompletedTask<T> {
+impl<T> CompletedTask<T>
+where
+    T: Clone + Send + 'static,
+{
     /// Creates a new completed task with the given value.
     #[inline]
     pub fn new(value: T) -> Self {
@@ -14,7 +19,10 @@ impl<T> CompletedTask<T> {
     }
 }
 
-impl<T> Future for CompletedTask<T> {
+impl<T> Future for CompletedTask<T>
+where
+    T: Clone + Send + 'static,
+{
     type Output = T;
 
     #[inline]
@@ -27,15 +35,15 @@ impl<T> Future for CompletedTask<T> {
 }
 
 // Implementing Unpin since CompletedTask has no self-referential data
-impl<T> Unpin for CompletedTask<T> {}
+impl<T> Unpin for CompletedTask<T> where T: Clone + Send + 'static {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task_utils;
     use std::future::Future;
     use std::pin::Pin;
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-    use crate::TaskUtils;
 
     // Helper to create a dummy waker for testing
     fn dummy_waker() -> Waker {
@@ -82,7 +90,7 @@ mod tests {
 
     #[test]
     fn from_result_helper() {
-        let mut task = TaskUtils::completed_task(100);
+        let mut task = task_utils::completed_task(100);
         let waker = dummy_waker();
         let mut ctx = Context::from_waker(&waker);
 
@@ -112,7 +120,7 @@ mod tests {
 
     #[tokio::test]
     async fn from_result_in_async_context() {
-        let result = TaskUtils::completed_task("test").await;
+        let result = task_utils::completed_task("test").await;
         assert_eq!(result, "test");
     }
 
@@ -124,7 +132,7 @@ mod tests {
 
     #[tokio::test]
     async fn completed_task_with_complex_type() {
-        #[derive(Debug, PartialEq)]
+        #[derive(Debug, PartialEq, Clone)]
         struct Complex {
             name: String,
             value: i32,

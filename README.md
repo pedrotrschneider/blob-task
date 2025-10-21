@@ -1,6 +1,6 @@
-# Blob Task: High-Performance Async Utilities for the Blob Game Engine
+# BlobTask: High-Performance Async Utilities
 
-A UniTask-inspired async/await library for Rust, built on top of Tokio. Designed for maximum efficiency, minimal allocations, and ergonomic async patterns.
+A UniTask-inspired async/await library for the Blob game engine, built on top of Tokio. Designed for maximum efficiency, minimal allocations, and ergonomic async patterns.
 
 ## Philosophy
 
@@ -10,6 +10,79 @@ This library follows UniTask's core principles:
 - **Explicit control** over async operations
 - **Type-safe** and memory-safe by design
 - **Composable** primitives for complex async workflows
+- **UniTask-like wrapper types** instead of raw futures
+
+## Core Concepts
+
+### BlobTask - The UniTask Equivalent
+
+`BlobTask<T>` is our equivalent to UniTask's `UniTask<T>`. It's a clonable, awaitable wrapper around futures that:
+- Runs the inner future **exactly once** even when cloned
+- Can be awaited multiple times from different clones
+- All clones receive the same result
+- Automatically spawns on the Tokio runtime when first polled
+
+**Why BlobTask?**
+- Share the same async operation across multiple awaits
+- Clone and pass around without re-executing
+- Perfect for caching expensive async operations
+- Similar ergonomics to C#'s `Task<T>` or UniTask's `UniTask<T>`
+
+#### Usage Example
+
+```rust
+use blob_task::{BlobTask, ToBlobTaskExt};
+
+#[tokio::main]
+async fn main() {
+    // Create from a future
+    let task = BlobTask::from_future(async {
+        expensive_operation().await
+    });
+    
+    // Clone and await multiple times - runs only once!
+    let task1 = task.clone();
+    let task2 = task.clone();
+    
+    let (r1, r2) = tokio::join!(task1, task2);
+    // Both get the same result, but operation ran only once
+    
+    // Or use the extension trait
+    let task = async { 42 }.to_blob_task();
+    let result = task.await;
+}
+```
+
+### Block and Forget - Synchronous Execution
+
+Two traits for executing futures outside async contexts:
+
+**Block** - Synchronously wait for a future to complete
+**Forget** - Fire-and-forget execution (spawn and don't wait)
+
+#### Usage Examples
+
+```rust
+use blob_task::{Block, Forget};
+
+// Block - wait synchronously (NOT inside async fn!)
+fn main() {
+    let result = (async {
+        fetch_data().await
+    }).block();
+    
+    println!("Result: {}", result);
+}
+
+// Forget - spawn and don't wait
+fn trigger_background_work() {
+    (async {
+        cleanup_database().await;
+    }).forget();
+    
+    // Returns immediately, work continues in background
+}
+```
 
 ## Features Implemented
 
@@ -22,11 +95,12 @@ A zero-allocation future that completes immediately with a value. Perfect for AP
 - **Allocation**: Zero heap allocations
 - **Performance**: Completes in a single poll
 - **Safety**: Panics if polled after completion (helps catch bugs)
+- **Constraint**: Requires `T: Clone + Send + 'static` for consistency
 
 #### Usage Example
 
 ```rust
-use your_async_lib::CompletedTask;
+use blob_task::{CompletedTask, task_utils};
 
 #[tokio::main]
 async fn main() {
@@ -35,8 +109,8 @@ async fn main() {
     let result = task.await;
     assert_eq!(result, 42);
 
-    // Using from_result method
-    let task = CompletedTask::from_result("hello");
+    // Using helper function
+    let task = blob_task::completed_task("hello");
     let result = task.await;
     assert_eq!(result, "hello");
 }
@@ -52,10 +126,10 @@ async fn main() {
 async fn get_cached_or_fetch(key: &str) -> impl Future<Output = String> {
     if let Some(cached) = check_cache(key) {
         // Return immediately without async overhead
-        CompletedTask::from_result(cached)
+        blob_task::completed_task(cached)
     } else {
         // Actually perform async work
-        fetch_from_network(key)
+        fetch_from_network(key).to_blob_task()
     }
 }
 ```
@@ -74,32 +148,23 @@ A powerful primitive that allows you to create a future and complete it manually
 - **Idempotent**: Completing twice returns `false` but doesn't panic
 - **Requires Clone**: The result type must implement `Clone` for multiple consumers
 
-#### Architecture
-```
-TaskCompletionSource (clonable handle)
-         ↓
-    Arc<Mutex<SharedState>>
-         ↓
-    TaskCompletionFuture (awaitable)
-```
-
 #### Usage Example
 
 ```rust
-use your_async_lib::TaskCompletionSource;
+use blob_task::TaskCompletionSource;
 use std::thread;
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
-    let tcs = TaskCompletionSource::new();
+    let tcs = blob_task::task_completion_source();
     let task = tcs.task();
 
     // Complete from another thread
     let tcs_clone = tcs.clone();
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(100));
-        tcs_clone.set_result(42);
+        tcs_clone.complete(42);
     });
 
     // Await the result
@@ -111,74 +176,19 @@ async fn main() {
 #### Advanced Pattern: Bridging Callback-Based APIs
 
 ```rust
-use your_async_lib::TaskCompletionSource;
-
-// Convert a callback-based API to async/await
-fn legacy_api_with_callback<F>(callback: F) 
-where 
-    F: FnOnce(String) + Send + 'static 
-{
-    // Simulates an old callback-based API
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        callback(String::from("data"));
-    });
-}
+use blob_task::TaskCompletionSource;
 
 async fn async_wrapper() -> String {
     let tcs = TaskCompletionSource::new();
-    let task = tcs.task();
+    let tcs_clone = tcs.clone();
     
     legacy_api_with_callback(move |data| {
-        tcs.set_result(data);
+        tcs_clone.complete(data);
     });
     
-    task.await
+    tcs.task().await
 }
 ```
-
-#### Multiple Awaits Pattern
-
-```rust
-let tcs = TaskCompletionSource::new();
-
-// Multiple tasks can await the same source
-let task1 = tcs.task();
-let task2 = tcs.task();
-let task3 = tcs.task();
-
-// Complete once
-tcs.set_result(100);
-
-// All tasks receive the same value (via Clone)
-let (r1, r2, r3) = tokio::join!(task1, task2, task3);
-assert_eq!((r1, r2, r3), (100, 100, 100));
-```
-
-#### Checking Completion State
-
-```rust
-let tcs = TaskCompletionSource::new();
-
-// Check if completed
-assert!(!tcs.is_completed());
-
-tcs.set_result(42);
-
-assert!(tcs.is_completed());
-
-// Try to get result without awaiting (requires Clone)
-if let Some(value) = tcs.try_get_result() {
-    println!("Already completed with: {}", value);
-}
-```
-
-#### When to Use
-- **Bridging APIs**: Converting callback-based code to async/await
-- **Manual control**: When you need precise control over when a future completes
-- **Synchronization**: Coordinating between sync and async code
-- **Event notifications**: Implementing one-shot events
-- **Testing**: Controlling async flow in tests
 
 ---
 
@@ -196,59 +206,44 @@ Utilities for delaying execution and yielding control to the executor, built on 
 
 **Delay**
 ```rust
-use your_async_lib::Delay;
+use blob_task::{task_utils, Delay};
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
-    // Delay for a duration
-    Delay::new(Duration::from_secs(1)).await;
+    // Using helper functions (recommended)
+    blob_task::wait_for_millis(500).await;
+    blob_task::wait_for_seconds(2).await;
+    blob_task::delay(Duration::from_secs(1)).await;
     
-    // Convenience methods
-    Delay::millis(500).await;
-    Delay::seconds(2).await;
+    // Direct construction
+    Delay::new(Duration::from_secs(1)).await;
 }
 ```
 
 **Yield**
 ```rust
-use your_async_lib::Yield;
+use blob_task::task_utils;
 
 #[tokio::main]
 async fn main() {
     // Yield control once to allow other tasks to run
-    Yield::new().await;
+    blob_task::yield_once().await;
     
     // Useful in loops to prevent blocking the executor
     for i in 0..1000 {
-        // Do work
         process_item(i);
         
         // Periodically yield to other tasks
         if i % 100 == 0 {
-            Yield::new().await;
+            blob_task::yield_once().await;
         }
     }
-}
-```
-
-**YieldMany**
-```rust
-use your_async_lib::YieldMany;
-
-#[tokio::main]
-async fn main() {
-    // Yield control 5 times
-    YieldMany::new(5).await;
     
-    // Useful for distributing work across multiple polls
+    // Yield multiple times
+    blob_task::yield_many(5).await;
 }
 ```
-
-#### When to Use
-- **Delay**: Timeouts, rate limiting, scheduled tasks
-- **Yield**: Preventing task starvation in tight loops
-- **YieldMany**: Distributing expensive computations across polls
 
 ---
 
@@ -266,11 +261,11 @@ A thread-safe cancellation token system for signaling and observing cancellation
 
 **Basic Cancellation**
 ```rust
-use your_async_lib::CancellationToken;
+use blob_task::CancellationToken;
 
 #[tokio::main]
 async fn main() {
-    let token = CancellationToken::new();
+    let token = blob_task::cancellation_token();
     let token_clone = token.clone();
     
     tokio::spawn(async move {
@@ -286,7 +281,7 @@ async fn main() {
 
 **Timeout Pattern with tokio::select!**
 ```rust
-use your_async_lib::{CancellationToken, Delay};
+use blob_task::CancellationToken;
 
 #[tokio::main]
 async fn main() {
@@ -306,110 +301,93 @@ async fn main() {
 
 **Parent-Child Tokens**
 ```rust
-use your_async_lib::CancellationToken;
+let parent = blob_task::cancellation_token();
+let child = parent.new_child();
 
-#[tokio::main]
-async fn main() {
-    let parent = CancellationToken::new();
-    let child = parent.new_child();
-    
-    // Cancelling parent also cancels all children
-    parent.cancel();
-    
-    assert!(child.is_cancelled());
-}
+// Cancelling parent also cancels all children
+parent.cancel();
+
+assert!(child.is_cancelled());
 ```
-
-**Checking State**
-```rust
-let token = CancellationToken::new();
-
-if token.is_cancelled() {
-    // Already cancelled
-    return;
-}
-
-// Do work...
-```
-
-#### When to Use
-- **Timeout operations**: Cancel work that takes too long
-- **User cancellation**: Respond to "Cancel" button clicks
-- **Graceful shutdown**: Coordinate shutdown of multiple tasks
-- **Resource cleanup**: Signal dependent resources to clean up
 
 ---
 
 ### ✅ WhenAll and WhenAny - Future Combinators
 
-Utilities for combining multiple futures, similar to `Promise.all()` and `Promise.race()` in JavaScript.
+Utilities for combining multiple futures, similar to `Promise.all()` and `Promise.race()` in JavaScript. Uses convenient macros and BlobTask under the hood.
 
 #### Implementation Details
 - **WhenAll**: Waits for all futures, preserves order
 - **WhenAny**: Returns first completed future with its index
-- **Generic**: Works with any future type
-- **Efficient**: Minimal allocations
+- **BlobTask-based**: Ensures each future runs only once
+- **Macro syntax**: Ergonomic syntax similar to UniTask
 
 #### Usage Examples
 
 **WhenAll - Wait for Multiple Futures**
 ```rust
-use your_async_lib::{when_all, CompletedTask};
+use blob_task::{when_all, CompletedTask};
 
 #[tokio::main]
 async fn main() {
-    let futures = vec![
+    // Using the macro (recommended)
+    let results = when_all!(
         CompletedTask::new(1),
         CompletedTask::new(2),
         CompletedTask::new(3),
-    ];
+    ).await;
     
-    let results = when_all(futures).await;
     assert_eq!(results, vec![1, 2, 3]);
 }
 ```
 
-**WhenAll with Mixed Delays**
+**WhenAll with Async Blocks**
 ```rust
-use your_async_lib::Delay;
+use blob_task::{when_all, task_utils};
 
 #[tokio::main]
 async fn main() {
-    let futures = vec![
-        Box::pin(async {
-            Delay::millis(100).await;
+    let results = when_all!(
+        async {
+            blob_task::wait_for_millis(100).await;
             1
-        }) as Pin<Box<dyn Future<Output = i32> + Send>>,
-        Box::pin(async {
-            Delay::millis(50).await;
+        },
+        async {
+            blob_task::wait_for_millis(50).await;
             2
-        }),
-    ];
+        },
+        async {
+            blob_task::wait_for_millis(75).await;
+            3
+        },
+    ).await;
     
-    let results = when_all(futures).await;
     // Results are in original order, not completion order
-    assert_eq!(results, vec![1, 2]);
+    assert_eq!(results, vec![1, 2, 3]);
 }
 ```
 
 **WhenAny - Race Multiple Futures**
 ```rust
-use your_async_lib::{when_any, Delay};
+use blob_task::{when_any, task_utils};
 
 #[tokio::main]
 async fn main() {
-    let futures = vec![
-        Box::pin(async {
-            Delay::millis(100).await;
+    let result = when_any!(
+        async {
+            blob_task::wait_for_millis(200).await;
             "slow"
-        }) as Pin<Box<dyn Future<Output = &str> + Send>>,
-        Box::pin(async {
-            Delay::millis(50).await;
+        },
+        async {
+            blob_task::wait_for_millis(50).await;
             "fast"
-        }),
-    ];
+        },
+        async {
+            blob_task::wait_for_millis(300).await;
+            "slowest"
+        },
+    ).await;
     
-    let result = when_any(futures).await;
     assert_eq!(result.result, "fast");
     assert_eq!(result.index, 1);
 }
@@ -417,25 +395,22 @@ async fn main() {
 
 **Practical Timeout Pattern**
 ```rust
-use your_async_lib::{when_any, Delay};
+use blob_task::{when_any, task_utils};
 
 async fn fetch_with_timeout(url: &str) -> Result<String, &'static str> {
-    let futures = vec![
-        Box::pin(fetch_url(url)) as Pin<Box<dyn Future<Output = Result<String, &'static str>> + Send>>,
-        Box::pin(async {
-            Delay::seconds(5).await;
+    let result = when_any!(
+        async { 
+            Ok(fetch_url(url).await)
+        },
+        async {
+            blob_task::wait_for_seconds(5).await;
             Err("timeout")
-        }),
-    ];
+        },
+    ).await;
     
-    let result = when_any(futures).await;
     result.result
 }
 ```
-
-#### When to Use
-- **WhenAll**: Parallel operations that all must complete (batch processing, parallel downloads)
-- **WhenAny**: Racing operations (timeout, fastest mirror, fallback servers)
 
 ---
 
@@ -454,7 +429,7 @@ Thread-safe object pooling for reducing allocations in high-performance scenario
 
 **Basic Object Pool**
 ```rust
-use your_async_lib::ObjectPool;
+use blob_task::ObjectPool;
 
 #[tokio::main]
 async fn main() {
@@ -472,19 +447,9 @@ async fn main() {
 }
 ```
 
-**Pool with Capacity Limit**
-```rust
-use your_async_lib::ObjectPool;
-
-let pool = ObjectPool::with_capacity(|| Vec::<u8>::new(), 10);
-
-// Pool will only keep up to 10 objects
-// Extra objects are dropped instead of pooled
-```
-
 **Pool with Reset Function**
 ```rust
-use your_async_lib::ObjectPoolWithReset;
+use blob_task::ObjectPoolWithReset;
 
 let pool = ObjectPoolWithReset::new(
     || Vec::<u8>::new(),
@@ -501,83 +466,33 @@ let buffer = pool.rent();
 assert_eq!(buffer.len(), 0);
 ```
 
-**Taking Ownership**
-```rust
-let pool = ObjectPool::new(|| Vec::<u8>::new());
+---
 
-let mut obj = pool.rent();
-obj.push(42);
+## Helper Functions (task_utils)
 
-// Take ownership, preventing return to pool
-let owned = obj.take();
-assert_eq!(pool.available(), 0);
-```
-
-**Concurrent Usage**
-```rust
-use your_async_lib::ObjectPool;
-
-#[tokio::main]
-async fn main() {
-    let pool = ObjectPool::new(|| Vec::<u8>::new());
-    
-    let mut handles = vec![];
-    for i in 0..10 {
-        let pool_clone = pool.clone();
-        let handle = tokio::spawn(async move {
-            let mut buffer = pool_clone.rent();
-            buffer.push(i);
-            // Automatically returned
-        });
-        handles.push(handle);
-    }
-    
-    for handle in handles {
-        handle.await.unwrap();
-    }
-    
-    // Objects are now available for reuse
-    println!("Available: {}", pool.available());
-}
-```
-
-**Custom Types**
-```rust
-struct Connection {
-    url: String,
-    connected: bool,
-}
-
-let pool = ObjectPoolWithReset::new(
-    || Connection {
-        url: String::from("localhost"),
-        connected: false,
-    },
-    |conn| {
-        conn.connected = false; // Reset state
-    },
-);
-```
-
-#### Pool Management
+The library provides convenient helper functions in the `task_utils` module for common operations:
 
 ```rust
-let pool = ObjectPool::new(|| Vec::<u8>::new());
+use blob_task::task_utils;
 
-// Check available objects
-println!("Available: {}", pool.available());
+// CompletedTask
+let task = blob_task::completed_task(42);
 
-// Clear all pooled objects
-pool.clear();
+// Delays
+blob_task::delay(Duration::from_secs(1)).await;
+blob_task::wait_for_millis(100).await;
+blob_task::wait_for_seconds(2).await;
 
-assert_eq!(pool.available(), 0);
+// Yields
+blob_task::yield_once().await;
+blob_task::yield_many(5).await;
+
+// CancellationToken
+let token = blob_task::cancellation_token();
+
+// TaskCompletionSource
+let tcs = blob_task::task_completion_source::<i32>();
 ```
-
-#### When to Use
-- **Buffer pooling**: Reuse byte buffers, string builders
-- **Connection pooling**: Database connections, HTTP clients
-- **Temporary objects**: Frequently created/destroyed objects in hot paths
-- **Reducing GC pressure**: Minimize allocations in performance-critical code
 
 ---
 
@@ -586,12 +501,15 @@ assert_eq!(pool.available(), 0);
 ```
 src/
 ├── lib.rs                      # Public API exports
+├── blob_task.rs                # BlobTask wrapper (UniTask equivalent)
+├── block_forget.rs             # Block and Forget traits
 ├── completed_task.rs           # CompletedTask implementation
 ├── task_completion_source.rs  # TaskCompletionSource implementation
 ├── delay_yield.rs              # Delay, Yield, YieldMany
 ├── cancellation_token.rs       # CancellationToken implementation
-├── when_combinators.rs         # WhenAll, WhenAny combinators
-└── object_pool.rs              # ObjectPool implementations
+├── when_combinators.rs         # WhenAll, WhenAny with macros
+├── object_pool.rs              # ObjectPool implementations
+└── task_utils.rs               # Helper functions
 ```
 
 ## Dependencies
@@ -606,7 +524,7 @@ tokio = { version = "1", features = ["rt", "macros", "time", "rt-multi-thread"] 
 
 ## Testing
 
-Comprehensive test coverage for all features (100+ tests):
+Comprehensive test coverage for all features (120+ tests):
 
 ```bash
 # Run all tests
@@ -622,45 +540,126 @@ cargo test delay_yield
 cargo test cancellation_token
 cargo test when_combinators
 cargo test object_pool
+cargo test blob_task
+cargo test block_forget
 ```
 
 ## Complete Feature List
 
+✅ **BlobTask** - UniTask-like wrapper around futures
+
+✅ **Block/Forget** - Synchronous execution and fire-and-forget
+
 ✅ **CompletedTask** - Immediately resolved futures
+
 ✅ **TaskCompletionSource** - Manual future completion
+
 ✅ **Delay/Yield utilities** - Time-based and cooperative yielding
+
 ✅ **CancellationToken** - Cooperative cancellation support
-✅ **WhenAll/WhenAny** - Future combinators
+
+✅ **WhenAll/WhenAny** - Future combinators with macros
+
 ✅ **ObjectPool** - Allocation pooling for performance
+
+✅ **Helper functions** - Convenient wrappers in task_utils
 
 ## Design Principles
 
-### 1. Zero-Cost Abstractions
+### 1. UniTask-Inspired API
+Provides familiar patterns for developers coming from Unity/C# while maintaining Rust's safety guarantees.
+
+### 2. Zero-Cost Abstractions
 Every abstraction is designed to compile down to efficient machine code with no runtime overhead.
 
-### 2. Memory Safety
+### 3. Memory Safety
 Leverages Rust's ownership system to prevent data races and memory leaks without runtime checks.
 
-### 3. Composability
+### 4. Composability
 Small, focused primitives that can be combined to build complex async workflows.
 
-### 4. Explicit Over Implicit
+### 5. Explicit Over Implicit
 Clear APIs that make the cost and behavior of operations obvious.
 
-### 5. Tokio Integration
+### 6. Tokio Integration
 Built on top of Tokio, not reinventing the wheel. We add ergonomic utilities, not replace the runtime.
 
 ## Performance Characteristics
 
-| Feature | Allocation | Poll Overhead | Thread-Safe |
-|---------|-----------|---------------|-------------|
-| CompletedTask | Zero | Single poll | N/A (immediate) |
-| TaskCompletionSource | Arc+Mutex | Minimal | Yes |
-| Delay | Tokio heap | Tokio overhead | Yes |
-| Yield | Zero | Single poll | Yes |
-| CancellationToken | Arc+Mutex | Minimal | Yes |
-| WhenAll/WhenAny | Vec+Box | Per-future poll | N/A |
-| ObjectPool | Arc+Mutex+Vec | Lock contention | Yes |
+| Feature | Allocation | Poll Overhead | Thread-Safe | Runs Once |
+|---------|-----------|---------------|-------------|-----------|
+| BlobTask | Arc+Mutex | Spawn overhead | Yes | Yes |
+| CompletedTask | Zero | Single poll | N/A | N/A |
+| TaskCompletionSource | Arc+Mutex | Minimal | Yes | N/A |
+| Delay | Tokio heap | Tokio overhead | Yes | N/A |
+| Yield | Zero | Single poll | Yes | N/A |
+| CancellationToken | Arc+Mutex | Minimal | Yes | N/A |
+| WhenAll/WhenAny | Arc+Mutex (via BlobTask) | Per-future poll | Yes | Yes |
+| ObjectPool | Arc+Mutex+Vec | Lock contention | Yes | N/A |
+
+## Examples
+
+### Complete Example: Async Web Request with Timeout and Cancellation
+
+```rust
+use blob_task::{when_any, CancellationToken, Block};
+
+async fn fetch_with_timeout_and_cancellation(
+    url: &str,
+    token: CancellationToken,
+) -> Result<String, &'static str> {
+    let result = blob_task::when_any!(
+        async {
+            fetch_url(url).await.map_err(|_| "fetch failed")
+        },
+        async {
+            blob_task::wait_for_seconds(5).await;
+            Err("timeout")
+        },
+        async {
+            token.cancelled_future().await;
+            Err("cancelled")
+        },
+    ).await;
+    
+    result.result
+}
+
+// Can be called from sync context with .block()
+fn main() {
+    let token = blob_task::cancellation_token();
+    
+    let result = fetch_with_timeout_and_cancellation(
+        "https://example.com",
+        token
+    ).block();
+    
+    println!("{:?}", result);
+}
+```
+
+### Complete Example: Parallel Processing with Pool
+
+```rust
+use blob_task::{ObjectPool, when_all, BlobTask};
+
+async fn process_batch(items: Vec<Item>) -> Vec<Result> {
+    let pool = ObjectPool::new(|| Vec::with_capacity(100));
+    
+    let tasks: Vec<BlobTask<Result>> = items
+        .into_iter()
+        .map(|item| {
+            let pool = pool.clone();
+            BlobTask::from_future(async move {
+                let mut buffer = pool.rent();
+                process_item(item, &mut buffer).await
+            })
+        })
+        .collect();
+    
+    WhenAll::from_blob_tasks(tasks).await
+}
+```
 
 ## Contributing
 
@@ -676,11 +675,23 @@ This is a learning project focused on building high-performance async utilities.
 
 ### Q: How is this different from Tokio's built-in utilities?
 
-**A**: This library provides higher-level ergonomic patterns inspired by UniTask, while Tokio focuses on the runtime and low-level primitives. We build on top of Tokio to provide common patterns like manual task completion, object pooling, and specialized future types.
+**A**: This library provides higher-level ergonomic patterns inspired by UniTask, while Tokio focuses on the runtime and low-level primitives. We build on top of Tokio to provide common patterns like manual task completion, object pooling, BlobTask wrappers, and specialized future types.
 
-### Q: Should I use CompletedTask or just return the value directly?
+### Q: What is BlobTask and why should I use it?
 
-**A**: Use `CompletedTask` when you need to return a `Future` type from a function, but have an immediate result. It's more efficient than `Box::pin(async { value })`.
+**A**: `BlobTask<T>` is our equivalent to UniTask's `UniTask<T>`. It wraps a future and ensures it runs exactly once, even when cloned. All clones receive the same result. Use it when you need to share an async operation across multiple awaits without re-execution - perfect for caching, sharing results, or implementing async lazy initialization.
+
+### Q: When should I use Block vs regular .await?
+
+**A**: Use `Block` only in **synchronous contexts** (like `main()` or callback handlers) where you need to wait for an async operation. Never use it inside async functions - use `.await` instead. `Block` creates or uses a Tokio runtime to execute the future synchronously.
+
+### Q: What's the difference between Forget and tokio::spawn?
+
+**A**: `Forget` is a convenience trait that works in both sync and async contexts. If a runtime exists, it uses `tokio::spawn`. If not, it creates a temporary runtime on a new thread. It's fire-and-forget - you don't get a JoinHandle back.
+
+### Q: Why do the when_all! and when_any! use macros?
+
+**A**: The macros provide a clean syntax and automatically convert futures to `BlobTask`, ensuring each future runs only once. They're more ergonomic than manually constructing vectors and calling methods.
 
 ### Q: Is TaskCompletionSource thread-safe?
 
@@ -694,10 +705,6 @@ This is a learning project focused on building high-performance async utilities.
 
 **A**: Use ObjectPool when you're frequently allocating and deallocating the same type of object (like buffers or connections) in performance-critical code. Profile first - premature optimization is the root of all evil!
 
-### Q: Can I use WhenAny for timeout patterns?
+### Q: Why does everything require T: Clone + Send + 'static?
 
-**A**: Yes! Combine it with `Delay` to create timeout operations. However, `tokio::select!` is often more ergonomic for this use case.
-
-### Q: Why does TaskCompletionSource require Clone on the result type?
-
-**A**: To support multiple futures awaiting the same result. Each future gets a cloned copy of the result. If you only need one consumer, consider using channels instead.
+**A**: These bounds ensure type safety and thread safety across the library. `Clone` allows BlobTask to share results, `Send` ensures thread safety, and `'static` prevents lifetime issues with spawned tasks.

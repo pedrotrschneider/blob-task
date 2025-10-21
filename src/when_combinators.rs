@@ -1,73 +1,78 @@
+use crate::BlobTask;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 /// Future that completes when all provided futures complete.
 /// Returns a vector of all results in order.
-pub struct WhenAll<F>
+pub struct WhenAll<T>
 where
-    F: Future,
+    T: Clone + Send + 'static,
 {
-    futures: Vec<Pin<Box<F>>>,
-    results: Vec<Option<F::Output>>,
+    tasks: Vec<BlobTask<T>>,
+    results: Vec<Option<T>>,
     completed_count: usize,
 }
 
-impl<F> WhenAll<F>
+impl<T> WhenAll<T>
 where
-    F: Future,
+    T: Clone + Send + 'static,
 {
     /// Creates a new WhenAll combinator from a vector of futures
-    pub fn new(futures: Vec<F>) -> Self {
+    pub fn from_futures(futures: Vec<Pin<Box<dyn Future<Output = T> + Send>>>) -> Self {
         let len = futures.len();
         return Self {
-            futures: futures.into_iter().map(Box::pin).collect(),
+            tasks: futures.into_iter().map(BlobTask::from_future).collect(),
+            results: (0..len).map(|_| None).collect(),
+            completed_count: 0,
+        };
+    }
+
+    pub fn from_blob_tasks(tasks: Vec<BlobTask<T>>) -> Self {
+        let len = tasks.len();
+        return Self {
+            tasks,
             results: (0..len).map(|_| None).collect(),
             completed_count: 0,
         };
     }
 }
 
-impl<F> Future for WhenAll<F>
+impl<T> Future for WhenAll<T>
 where
-    F: Future,
+    T: Clone + Send + 'static,
 {
-    type Output = Vec<F::Output>;
+    type Output = Vec<T>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: We're not moving anything out of self, only accessing and modifying fields.
-        // WhenAll doesn't have self-referential data.
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: We never move the fields, only modify them in-place
         let this = unsafe { self.get_unchecked_mut() };
 
-        let future_count = this.futures.len();
-
-        // Handle empty case
-        if future_count == 0 {
+        if this.tasks.is_empty() {
             return Poll::Ready(Vec::new());
         }
 
-        // Poll all incomplete futures
-        for i in 0..future_count {
+        for i in 0..this.tasks.len() {
             if this.results[i].is_some() {
                 continue; // Already completed
             }
 
-            match this.futures[i].as_mut().poll(cx) {
+            let task = unsafe { Pin::new_unchecked(&mut this.tasks[i]) };
+            match task.poll(ctx) {
                 Poll::Ready(result) => {
                     this.results[i] = Some(result);
                     this.completed_count += 1;
                 }
-                Poll::Pending => continue,
+                Poll::Pending => {} // do nothing
             }
         }
 
-        // Check if all completed
-        if this.completed_count == future_count {
-            let results: Vec<F::Output> = this.results.iter_mut().map(|r| r.take().unwrap()).collect();
-            return Poll::Ready(results);
-        }
-
-        return Poll::Pending;
+        return if this.completed_count == this.tasks.len() {
+            let results = this.results.iter_mut().map(|r| r.take().unwrap()).collect();
+            Poll::Ready(results)
+        } else {
+            Poll::Pending
+        };
     }
 }
 
@@ -80,48 +85,50 @@ pub struct WhenAnyResult<T> {
 
 /// Future that completes when any of the provided futures complete.
 /// Returns the first result along with its index.
-pub struct WhenAny<F>
+pub struct WhenAny<T>
 where
-    F: Future,
+    T: Clone + Send + 'static,
 {
-    futures: Vec<Pin<Box<F>>>,
+    tasks: Vec<BlobTask<T>>,
 }
 
-impl<F> WhenAny<F>
+impl<T> WhenAny<T>
 where
-    F: Future,
+    T: Clone + Send + 'static,
 {
     /// Creates a new WhenAny combinator from a vector of futures
-    pub fn new(futures: Vec<F>) -> Self {
+    pub fn from_futures(futures: Vec<Pin<Box<dyn Future<Output = T> + Send>>>) -> Self {
         return Self {
-            futures: futures.into_iter().map(Box::pin).collect(),
+            tasks: futures.into_iter().map(BlobTask::from_future).collect(),
         };
+    }
+
+    pub fn from_blob_tasks(tasks: Vec<BlobTask<T>>) -> Self {
+        return Self { tasks };
     }
 }
 
-impl<F> Future for WhenAny<F>
+impl<T> Future for WhenAny<T>
 where
-    F: Future,
+    T: Clone + Send + 'static,
 {
-    type Output = WhenAnyResult<F::Output>;
+    type Output = WhenAnyResult<T>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: We're not moving anything out of self, only accessing fields.
-        // WhenAny doesn't have self-referential data.
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: no self-referential data, safe to get mutable reference
         let this = unsafe { self.get_unchecked_mut() };
 
-        // Handle empty case - this will never complete
-        if this.futures.is_empty() {
+        if this.tasks.is_empty() {
             return Poll::Pending;
         }
 
-        // Poll all futures, return the first one that's ready
-        for (index, future) in this.futures.iter_mut().enumerate() {
-            match future.as_mut().poll(cx) {
+        for (index, task) in this.tasks.iter_mut().enumerate() {
+            let pinned_task = unsafe { Pin::new_unchecked(task) };
+            match pinned_task.poll(ctx) {
                 Poll::Ready(result) => {
                     return Poll::Ready(WhenAnyResult { result, index });
                 }
-                Poll::Pending => {}
+                Poll::Pending => continue,
             }
         }
 
@@ -132,54 +139,48 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blob_task::ToBlobTaskExt;
     use crate::completed_task::CompletedTask;
+    use crate::task_utils;
     use std::time::Duration;
-    use crate::TaskUtils;
 
     #[tokio::test]
     async fn when_all_with_completed_tasks() {
-        let futures = vec![CompletedTask::new(1), CompletedTask::new(2), CompletedTask::new(3)];
-
-        let results = TaskUtils::when_all(futures).await;
+        let results = crate::when_all!(CompletedTask::new(1), CompletedTask::new(2), CompletedTask::new(3)).await;
 
         assert_eq!(results, vec![1, 2, 3]);
     }
 
     #[tokio::test]
     async fn when_all_empty_vec() {
-        let futures: Vec<CompletedTask<i32>> = vec![];
-        let results = TaskUtils::when_all(futures).await;
+        let futures: Vec<BlobTask<i32>> = vec![];
+        let results = WhenAll::from_blob_tasks(futures).await;
 
         assert_eq!(results, Vec::<i32>::new());
     }
 
     #[tokio::test]
     async fn when_all_single_future() {
-        let futures = vec![CompletedTask::new(42)];
-        let results = TaskUtils::when_all(futures).await;
-
+        let results = crate::when_all!(CompletedTask::new(42)).await;
         assert_eq!(results, vec![42]);
     }
 
     #[tokio::test]
     async fn when_all_with_delays() {
-        let futures = vec![
-            Box::pin(async {
-                TaskUtils::wait_for_millis(50).await;
-                return 1;
-            }) as Pin<Box<dyn Future<Output = i32> + Send>>,
-            Box::pin(async {
-                TaskUtils::wait_for_millis(100).await;
-                return 2;
-            }),
-            Box::pin(async {
-                TaskUtils::wait_for_millis(25).await;
-                return 3;
-            }),
-        ];
-
+        let future1 = async {
+            task_utils::wait_for_millis(50).await;
+            return 1;
+        };
+        let future2 = async {
+            task_utils::wait_for_millis(100).await;
+            return 2;
+        };
+        let future3 = async {
+            task_utils::wait_for_millis(25).await;
+            return 3;
+        };
         let start = std::time::Instant::now();
-        let results = TaskUtils::when_all(futures).await;
+        let results = crate::when_all!(future1, future2, future3).await;
         let elapsed = start.elapsed();
 
         assert_eq!(results, vec![1, 2, 3]);
@@ -190,12 +191,11 @@ mod tests {
 
     #[tokio::test]
     async fn when_all_with_strings() {
-        let futures = vec![
+        let results = crate::when_all!(
             CompletedTask::new(String::from("hello")),
-            CompletedTask::new(String::from("world")),
-        ];
-
-        let results = TaskUtils::when_all(futures).await;
+            CompletedTask::new(String::from("world"))
+        )
+        .await;
 
         assert_eq!(results, vec![String::from("hello"), String::from("world")]);
     }
@@ -204,20 +204,20 @@ mod tests {
     async fn when_all_preserves_order() {
         let futures = vec![
             Box::pin(async {
-                TaskUtils::wait_for_millis(100).await;
+                task_utils::wait_for_millis(100).await;
                 return 1;
             }) as Pin<Box<dyn Future<Output = i32> + Send>>,
             Box::pin(async {
-                TaskUtils::wait_for_millis(50).await;
+                task_utils::wait_for_millis(50).await;
                 return 2;
             }),
             Box::pin(async {
-                TaskUtils::wait_for_millis(75).await;
+                task_utils::wait_for_millis(75).await;
                 return 3;
             }),
         ];
 
-        let results = TaskUtils::when_all(futures).await;
+        let results = WhenAll::from_futures(futures).await;
 
         // Despite different completion times, order is preserved
         assert_eq!(results, vec![1, 2, 3]);
@@ -225,9 +225,7 @@ mod tests {
 
     #[tokio::test]
     async fn when_any_with_completed_tasks() {
-        let futures = vec![CompletedTask::new(1), CompletedTask::new(2), CompletedTask::new(3)];
-
-        let result = TaskUtils::when_any(futures).await;
+        let result = crate::when_any!(CompletedTask::new(1), CompletedTask::new(2), CompletedTask::new(3)).await;
 
         // First one should complete (but any is valid)
         assert_eq!(result.index, 0);
@@ -236,8 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn when_any_single_future() {
-        let futures = vec![CompletedTask::new(42)];
-        let result = TaskUtils::when_any(futures).await;
+        let result = crate::when_any!(CompletedTask::new(42)).await;
 
         assert_eq!(result.index, 0);
         assert_eq!(result.result, 42);
@@ -245,23 +242,21 @@ mod tests {
 
     #[tokio::test]
     async fn when_any_returns_fastest() {
-        let futures = vec![
-            Box::pin(async {
-                TaskUtils::wait_for_millis(100).await;
-                return 1;
-            }) as Pin<Box<dyn Future<Output = i32> + Send>>,
-            Box::pin(async {
-                TaskUtils::wait_for_millis(25).await;
-                return 2;
-            }),
-            Box::pin(async {
-                TaskUtils::wait_for_millis(50).await;
-                return 3;
-            }),
-        ];
+        let future1 = async {
+            crate::wait_for_millis(100).await;
+            return 1;
+        };
+        let future2 = async {
+            crate::wait_for_millis(25).await;
+            return 2;
+        };
+        let future3 = async {
+            crate::wait_for_millis(50).await;
+            return 3;
+        };
 
         let start = std::time::Instant::now();
-        let result = TaskUtils::when_any(futures).await;
+        let result = crate::when_any!(future1, future2, future3).await;
         let elapsed = start.elapsed();
 
         // Should return the fastest (index 1, value 2)
@@ -273,12 +268,11 @@ mod tests {
 
     #[tokio::test]
     async fn when_any_with_strings() {
-        let futures = vec![
+        let result = crate::when_any!(
             CompletedTask::new(String::from("first")),
-            CompletedTask::new(String::from("second")),
-        ];
-
-        let result = TaskUtils::when_any(futures).await;
+            CompletedTask::new(String::from("second"))
+        )
+        .await;
 
         assert_eq!(result.index, 0);
         assert_eq!(result.result, String::from("first"));
@@ -286,18 +280,13 @@ mod tests {
 
     #[tokio::test]
     async fn when_all_struct_constructor() {
-        let futures = vec![CompletedTask::new(10), CompletedTask::new(20)];
-
-        let results = WhenAll::new(futures).await;
-
+        let results = crate::when_all!(CompletedTask::new(10), CompletedTask::new(20)).await;
         assert_eq!(results, vec![10, 20]);
     }
 
     #[tokio::test]
     async fn when_any_struct_constructor() {
-        let futures = vec![CompletedTask::new(99)];
-
-        let result = WhenAny::new(futures).await;
+        let result = crate::when_any!(CompletedTask::new(99)).await;
 
         assert_eq!(result.index, 0);
         assert_eq!(result.result, 99);
@@ -305,10 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn when_all_with_unit_type() {
-        let futures = vec![CompletedTask::new(()), CompletedTask::new(()), CompletedTask::new(())];
-
-        let results = TaskUtils::when_all(futures).await;
-
+        let results = crate::when_all!(CompletedTask::new(()), CompletedTask::new(()), CompletedTask::new(())).await;
         assert_eq!(results.len(), 3);
     }
 
@@ -334,13 +320,13 @@ mod tests {
 
     #[tokio::test]
     async fn when_all_with_complex_type() {
-        #[derive(Debug, PartialEq)]
+        #[derive(Debug, PartialEq, Clone)]
         struct Data {
             id: i32,
             name: String,
         }
 
-        let futures = vec![
+        let results = crate::when_all!(
             CompletedTask::new(Data {
                 id: 1,
                 name: String::from("first"),
@@ -348,10 +334,9 @@ mod tests {
             CompletedTask::new(Data {
                 id: 2,
                 name: String::from("second"),
-            }),
-        ];
-
-        let results = TaskUtils::when_all(futures).await;
+            })
+        )
+        .await;
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].id, 1);
@@ -360,22 +345,20 @@ mod tests {
 
     #[tokio::test]
     async fn when_any_with_different_completion_times() {
-        let futures = vec![
-            Box::pin(async {
-                TaskUtils::wait_for_millis(200).await;
-                return "slow";
-            }) as Pin<Box<dyn Future<Output = &str> + Send>>,
-            Box::pin(async {
-                TaskUtils::wait_for_millis(50).await;
-                return "fast";
-            }),
-            Box::pin(async {
-                TaskUtils::wait_for_millis(300).await;
-                return "slowest";
-            }),
-        ];
+        let future1 = async {
+            task_utils::wait_for_millis(200).await;
+            return "slow";
+        };
+        let future2 = async {
+            task_utils::wait_for_millis(50).await;
+            return "fast";
+        };
+        let future3 = async {
+            task_utils::wait_for_millis(300).await;
+            return "slowest";
+        };
 
-        let result = TaskUtils::when_any(futures).await;
+        let result = crate::when_any!(future1, future2, future3).await;
 
         assert_eq!(result.result, "fast");
         assert_eq!(result.index, 1);
@@ -383,9 +366,7 @@ mod tests {
 
     #[tokio::test]
     async fn when_all_large_number_of_futures() {
-        let futures: Vec<_> = (0..100).map(|i| CompletedTask::new(i)).collect();
-
-        let results = TaskUtils::when_all(futures).await;
+        let results = WhenAll::from_blob_tasks((0..100).map(|i| CompletedTask::new(i).to_blob_task()).collect()).await;
 
         assert_eq!(results.len(), 100);
         assert_eq!(results[0], 0);
@@ -394,9 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn when_any_large_number_of_futures() {
-        let futures: Vec<_> = (0..100).map(|i| CompletedTask::new(i)).collect();
-
-        let result = TaskUtils::when_any(futures).await;
+        let result = WhenAny::from_blob_tasks((0..100).map(|i| CompletedTask::new(i).to_blob_task()).collect()).await;
 
         assert_eq!(result.index, 0);
         assert_eq!(result.result, 0);
@@ -404,26 +383,24 @@ mod tests {
 
     #[tokio::test]
     async fn when_all_mixed_delay_times() {
-        let futures = vec![
-            Box::pin(async {
-                TaskUtils::wait_for_millis(30).await;
-                return 1;
-            }) as Pin<Box<dyn Future<Output = i32> + Send>>,
-            Box::pin(async {
-                TaskUtils::wait_for_millis(60).await;
-                return 2;
-            }),
-            Box::pin(async {
-                TaskUtils::wait_for_millis(45).await;
-                return 3;
-            }),
-            Box::pin(async {
-                TaskUtils::wait_for_millis(15).await;
-                return 4;
-            }),
-        ];
+        let task1 = async {
+            task_utils::wait_for_millis(30).await;
+            return 1;
+        };
+        let task2 = async {
+            task_utils::wait_for_millis(60).await;
+            return 2;
+        };
+        let task3 = async {
+            task_utils::wait_for_millis(45).await;
+            return 3;
+        };
+        let task4 = async {
+            task_utils::wait_for_millis(15).await;
+            return 4;
+        };
 
-        let results = TaskUtils::when_all(futures).await;
+        let results = crate::when_all!(task1, task2, task3, task4).await;
 
         // Order preserved despite different times
         assert_eq!(results, vec![1, 2, 3, 4]);
