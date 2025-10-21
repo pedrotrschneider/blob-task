@@ -1,6 +1,6 @@
+use crate::waiters::{WaitUntil, WaitWhile};
 use crate::{CancellationToken, CompletedTask, Delay, TaskCompletionSource, Yield, YieldMany};
 use std::time::Duration;
-use crate::waiters::{WaitUntil, WaitWhile};
 
 #[inline]
 pub fn completed_task<T>(value: T) -> CompletedTask<T>
@@ -85,13 +85,17 @@ pub fn task_completion_source<T>() -> TaskCompletionSource<T> {
 /// waiters.rs utils
 
 #[inline]
-pub fn wait_until<F>(predicate: F) -> WaitUntil<F> where
-    F: Fn() -> bool {
+pub fn wait_until<F>(predicate: F) -> WaitUntil<F>
+where
+    F: Fn() -> bool,
+{
     return WaitUntil::new(predicate);
 }
 
 #[inline]
-pub fn wait_while<F>(predicate: F) -> WaitWhile<F> where
-    F: Fn() -> bool {
+pub fn wait_while<F>(predicate: F) -> WaitWhile<F>
+where
+    F: Fn() -> bool,
+{
     return WaitWhile::new(predicate);
 }

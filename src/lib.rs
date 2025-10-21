@@ -1,13 +1,14 @@
 mod blob_task;
+mod block_forget;
 mod cancellation_token;
 mod completed_task;
 mod delay_yield;
 mod object_pool;
 mod task_completion_source;
 mod task_utils;
-mod when_combinators;
-mod block_forget;
+mod timeout;
 mod waiters;
+mod when_combinators;
 
 pub use blob_task::{BlobTask, ToBlobTaskExt};
 pub use block_forget::{Block, Forget};
@@ -17,5 +18,6 @@ pub use delay_yield::{Delay, Yield, YieldMany};
 pub use object_pool::{ObjectPool, ObjectPoolWithReset, PooledObject, PooledObjectWithReset};
 pub use task_completion_source::{TaskCompletionFuture, TaskCompletionSource};
 pub use task_utils::*;
-pub use when_combinators::{WhenAll, WhenAny, WhenAnyResult};
+pub use timeout::{Timeout, TimeoutError, TimeoutExt};
 pub use waiters::{WaitUntil, WaitWhile};
+pub use when_combinators::{WhenAll, WhenAny, WhenAnyResult};

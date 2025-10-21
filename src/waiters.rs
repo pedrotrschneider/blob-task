@@ -40,7 +40,7 @@ where
             // Wake immediately to check again on next poll
             ctx.waker().wake_by_ref();
             Poll::Pending
-        }
+        };
     }
 }
 
@@ -94,7 +94,7 @@ where
             // Wake immediately to check again on next poll
             ctx.waker().wake_by_ref();
             Poll::Pending
-        }
+        };
     }
 }
 
@@ -114,8 +114,8 @@ impl<F> Unpin for WaitWhile<F> where F: Fn() -> bool {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::time::sleep;
 

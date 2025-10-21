@@ -52,8 +52,8 @@ where
 mod block_forget_tests {
     use crate::block_forget::{Block, Forget};
     use crate::task_utils;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     #[test]
@@ -69,7 +69,7 @@ mod block_forget_tests {
             task_utils::wait_for_millis(100).await;
             return "done";
         })
-            .block();
+        .block();
         let elapsed = start.elapsed();
 
         assert_eq!(result, "done");
@@ -94,7 +94,7 @@ mod block_forget_tests {
             }
             return sum;
         })
-            .block();
+        .block();
 
         assert_eq!(result, 4950);
     }
@@ -113,7 +113,7 @@ mod block_forget_tests {
                 message: String::from("test"),
             }
         })
-            .block();
+        .block();
 
         assert_eq!(result.id, 1);
         assert_eq!(result.message, "test");
@@ -128,7 +128,7 @@ mod block_forget_tests {
             task_utils::wait_for_millis(50).await;
             executed_clone.store(true, Ordering::SeqCst);
         })
-            .forget();
+        .forget();
 
         // Give it time to execute
         std::thread::sleep(Duration::from_millis(150));
@@ -143,7 +143,7 @@ mod block_forget_tests {
         (async {
             task_utils::wait_for_millis(200).await;
         })
-            .forget();
+        .forget();
 
         let elapsed = start.elapsed();
 
@@ -161,7 +161,7 @@ mod block_forget_tests {
                 task_utils::wait_for_millis(50).await;
                 counter_clone.fetch_add(1, Ordering::SeqCst);
             })
-                .forget();
+            .forget();
         }
 
         // Give them time to execute
@@ -202,7 +202,7 @@ mod block_forget_tests {
                 task_utils::wait_for_millis(10).await;
             }
         })
-            .forget();
+        .forget();
 
         // Give it time to execute
         std::thread::sleep(Duration::from_millis(100));
@@ -232,7 +232,7 @@ mod block_forget_tests {
                 }
             }
         })
-            .block();
+        .block();
 
         assert_eq!(result, "cancelled");
     }
@@ -261,7 +261,7 @@ mod block_forget_tests {
             (async {
                 task_utils::wait_for_millis(1000).await;
             })
-                .forget();
+            .forget();
         }
 
         let elapsed = start.elapsed();

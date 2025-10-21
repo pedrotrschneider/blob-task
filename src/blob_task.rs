@@ -130,8 +130,8 @@ impl<F: Future> ToBlobTaskExt for F {}
 mod blob_task_tests {
     use crate::blob_task::{BlobTask, ToBlobTaskExt};
     use crate::task_utils;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     #[tokio::test]
@@ -278,8 +278,8 @@ mod blob_task_tests {
             task_utils::wait_for_millis(10).await;
             return 123;
         })
-            .to_blob_task()
-            .await;
+        .to_blob_task()
+        .await;
 
         assert_eq!(result, 123);
     }
