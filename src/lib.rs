@@ -11,6 +11,7 @@ mod timeout;
 mod wait_until_while;
 mod when_combinators;
 mod wait_value_changed;
+mod blob_lazy_task;
 
 pub use blob_task::{BlobTask, ToBlobTaskExt};
 pub use block_forget::{Block, Forget};
@@ -25,3 +26,4 @@ pub use timeout::{Timeout, TimeoutError, TimeoutExt};
 pub use wait_until_while::{WaitUntil, WaitWhile};
 pub use when_combinators::{WhenAll, WhenAny, WhenAnyResult};
 pub use wait_value_changed::{WaitForValueChanged, WaitForValueEquals};
+pub use blob_lazy_task::BlobLazyTask;
