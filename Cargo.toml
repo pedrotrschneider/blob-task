@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 tokio = { version = "1", features = ["rt", "macros", "time", "rt-multi-thread"] }
+pin-project-lite = "0.2.16"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "time", "rt-multi-thread"] }

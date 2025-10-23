@@ -1,63 +1,28 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::runtime::{Handle, Runtime};
-use tokio::time::Sleep;
+use tokio::time::{Sleep, self};
+use pin_project_lite::pin_project;
 
-/// State for a Delay
-struct DelayState {
-    sleep: Option<Pin<Box<Sleep>>>,
-    duration: Duration,
-    wakers: Vec<Waker>,
-    completed: bool,
+pin_project! {
+    /// A future that completes after a specified duration.
+    ///
+    /// This is a zero-allocation wrapper around `tokio::time::sleep`.
+    /// It must be created and used within a Tokio runtime.
+    #[must_use = "futures do nothing unless you .await or poll them"]
+    pub struct Delay {
+        #[pin]
+        sleep: Sleep,
+    }
 }
 
-pub struct Delay {
-    state: Arc<Mutex<DelayState>>,
-}
-
-/// A future that completes after a specified duration.
-/// Thin wrapper around tokio::time::sleep for consistency with the library's API.
 impl Delay {
-    /// Create a new delay (safe outside a runtime)
+    /// Create a new delay.
+    /// Must be called from within a Tokio runtime.
     pub fn new(duration: Duration) -> Self {
         Self {
-            state: Arc::new(Mutex::new(DelayState {
-                sleep: None,
-                duration,
-                wakers: Vec::new(),
-                completed: false,
-            })),
-        }
-    }
-
-    /// Spawn the timer if needed
-    fn spawn_if_needed(&self) {
-        let mut state = self.state.lock().unwrap();
-        if state.sleep.is_none() && !state.completed {
-            let duration = state.duration;
-            let state_clone = self.state.clone();
-
-            // Lazy creation: spawn on a runtime
-            if let Ok(_) = Handle::try_current() {
-                state.sleep = Some(Box::pin(tokio::time::sleep(duration)));
-            } else {
-                // No runtime -> spawn a thread with runtime
-                std::thread::spawn(move || {
-                    let rt = Runtime::new().expect("Failed to create Tokio runtime");
-                    let sleep_future = tokio::time::sleep(duration);
-                    rt.block_on(async move {
-                        sleep_future.await;
-                        let mut state = state_clone.lock().unwrap();
-                        state.completed = true;
-                        for w in state.wakers.drain(..) {
-                            w.wake();
-                        }
-                    });
-                });
-            }
+            sleep: time::sleep(duration),
         }
     }
 }
@@ -66,25 +31,13 @@ impl Future for Delay {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.spawn_if_needed();
-
-        let mut state = self.state.lock().unwrap();
-
-        if state.completed {
-            Poll::Ready(())
-        } else if let Some(sleep) = &mut state.sleep {
-            // Poll the sleep future if it exists
-            Pin::new(sleep).poll(cx)
-        } else {
-            // Sleep not yet spawned → register waker
-            state.wakers.push(cx.waker().clone());
-            Poll::Pending
-        }
+        self.project().sleep.poll(cx)
     }
 }
 
 /// A future that yields control back to the executor once.
 /// Useful for allowing other tasks to run without blocking.
+#[must_use = "futures do nothing unless you .await or poll them"]
 pub struct Yield {
     yielded: bool,
 }
@@ -122,6 +75,7 @@ impl Unpin for Yield {}
 
 /// A future that yields control N times before completing.
 /// Useful for distributing work across multiple executor polls.
+#[must_use = "futures do nothing unless you .await or poll them"]
 pub struct YieldMany {
     remaining: usize,
 }

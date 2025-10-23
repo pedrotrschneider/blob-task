@@ -1,8 +1,15 @@
 use tokio::runtime::{Handle, Runtime};
+use std::future::Future;
+use std::sync::{Arc, Mutex, Condvar}; // Import sync primitives
 
 /// Synchronously wait for a future to complete.
 ///
-/// **Important:** Must **not** be called from inside an async function.
+/// If called from within an existing Tokio runtime, it will
+/// spawn the task and use `block_in_place` to wait for its
+/// completion without stalling the executor.
+///
+/// If called from a non-async context, it will create a new
+/// temporary runtime and block on it.
 pub trait Block<T>
 where
     T: Clone + Send + 'static,
@@ -17,14 +24,53 @@ where
 {
     fn block(self) -> T {
         if let Ok(handle) = Handle::try_current() {
-            handle.block_on(self)
+            // We are inside an existing runtime.
+            // We must not call handle.block_on() or create a new runtime.
+            //
+            // 1. Create an Arc/Mutex/Condvar to receive the result.
+            // 2. Spawn the future onto the existing runtime.
+            // 3. Use `block_in_place` to wait on the Condvar.
+
+            let pair = Arc::new((Mutex::new(None::<T>), Condvar::new()));
+            let (lock, cvar) = &*pair;
+
+            let pair_clone = Arc::clone(&pair);
+            handle.spawn(async move {
+                let result = self.await;
+                let (lock, cvar) = &*pair_clone;
+                let mut guard = lock.lock().unwrap();
+                *guard = Some(result);
+                // Notify the waiting thread that the result is ready
+                cvar.notify_one();
+            });
+
+            // Tell Tokio that this thread is about to block
+            tokio::task::block_in_place(move || {
+                let mut guard = lock.lock().unwrap();
+                // Wait until the spawned task notifies us
+                while guard.is_none() {
+                    guard = cvar.wait(guard).unwrap();
+                }
+                // The guard now contains Some(result). Take it.
+                guard.take().unwrap()
+            })
+
         } else {
+            // We are not inside a runtime. This is the simple case.
+            // Create a new runtime and block on it.
             let rt = Runtime::new().expect("Failed to create Tokio runtime");
             rt.block_on(self)
         }
     }
 }
 
+/// Spawns a future to run in the background.
+///
+/// If called from within an existing Tokio runtime, it spawns
+/// onto that runtime.
+///
+/// If called from a non-async context, it will create a new
+/// temporary runtime on a new thread and run the future there.
 pub trait Forget {
     fn forget(self);
 }
@@ -55,6 +101,7 @@ mod block_forget_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
+    use crate::ToBlobTaskExt; // Import for test
 
     #[test]
     fn block_simple_future() {
@@ -69,7 +116,7 @@ mod block_forget_tests {
             task_utils::wait_for_millis(100).await;
             return "done";
         })
-        .block();
+            .block();
         let elapsed = start.elapsed();
 
         assert_eq!(result, "done");
@@ -94,7 +141,7 @@ mod block_forget_tests {
             }
             return sum;
         })
-        .block();
+            .block();
 
         assert_eq!(result, 4950);
     }
@@ -113,7 +160,7 @@ mod block_forget_tests {
                 message: String::from("test"),
             }
         })
-        .block();
+            .block();
 
         assert_eq!(result.id, 1);
         assert_eq!(result.message, "test");
@@ -128,7 +175,7 @@ mod block_forget_tests {
             task_utils::wait_for_millis(50).await;
             executed_clone.store(true, Ordering::SeqCst);
         })
-        .forget();
+            .forget();
 
         // Give it time to execute
         std::thread::sleep(Duration::from_millis(150));
@@ -143,7 +190,7 @@ mod block_forget_tests {
         (async {
             task_utils::wait_for_millis(200).await;
         })
-        .forget();
+            .forget();
 
         let elapsed = start.elapsed();
 
@@ -161,7 +208,7 @@ mod block_forget_tests {
                 task_utils::wait_for_millis(50).await;
                 counter_clone.fetch_add(1, Ordering::SeqCst);
             })
-            .forget();
+                .forget();
         }
 
         // Give them time to execute
@@ -202,7 +249,7 @@ mod block_forget_tests {
                 task_utils::wait_for_millis(10).await;
             }
         })
-        .forget();
+            .forget();
 
         // Give it time to execute
         std::thread::sleep(Duration::from_millis(100));
@@ -232,7 +279,7 @@ mod block_forget_tests {
                 }
             }
         })
-        .block();
+            .block();
 
         assert_eq!(result, "cancelled");
     }
@@ -261,7 +308,7 @@ mod block_forget_tests {
             (async {
                 task_utils::wait_for_millis(1000).await;
             })
-            .forget();
+                .forget();
         }
 
         let elapsed = start.elapsed();
@@ -296,4 +343,45 @@ mod block_forget_tests {
         std::thread::sleep(Duration::from_millis(150));
         assert!(executed.load(Ordering::SeqCst));
     }
+
+    #[tokio::test(flavor = "multi_thread")] // Use the multithreaded runtime
+    async fn block_from_within_a_runtime_context() {
+        async fn test_async() -> i32 {
+            task_utils::wait_for_millis(50).await;
+            3
+        }
+
+        fn test_sync() -> i32 {
+            // This .block() call is happening *inside* an active runtime
+            let result = test_async().to_blob_task().block();
+            result
+        }
+
+        // We are inside #[tokio::test]
+        let result = test_sync();
+        assert_eq!(result, 3);
+    }
+
+    // Another test for forget from within a runtime
+    #[tokio::test(flavor = "multi_thread")] // Use the multithreaded runtime
+    async fn forget_from_within_a_runtime_context() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+
+        fn test_sync_forget(counter: Arc<AtomicUsize>) {
+            // This .forget() call is happening *inside* an active runtime
+            (async move {
+                task_utils::wait_for_millis(50).await;
+                counter.fetch_add(1, Ordering::SeqCst);
+            }).forget();
+        }
+
+        test_sync_forget(counter_clone);
+
+        // The .forget() should have spawned onto the current runtime
+        // so we can just wait for it.
+        task_utils::wait_for_millis(100).await;
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
 }
+

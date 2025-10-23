@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
 };
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::Handle;
 
 /// Shared internal state of the BlobTask.
 struct BlobTaskSharedState<T>
@@ -19,6 +19,7 @@ where
 /// A clonable, awaitable wrapper that runs its inner future exactly once.
 ///
 /// Each clone can `.await` it independently; they all receive the same result.
+/// This future must be polled from within an active Tokio runtime.
 pub struct BlobTask<T>
 where
     T: Clone + Send + 'static,
@@ -55,29 +56,20 @@ where
 
         if let Some(fut) = maybe_fut {
             let state_clone = self.state.clone();
-            if let Ok(handle) = Handle::try_current() {
-                handle.spawn(async move {
-                    let result = fut.await;
-                    let mut state = state_clone.lock().unwrap();
-                    state.result = Some(result);
-                    for w in state.wakers.drain(..) {
-                        w.wake();
-                    }
-                });
-            } else {
-                // no runtime → spawn a thread with a full-featured runtime
-                std::thread::spawn(move || {
-                    let rt = Runtime::new().expect("Failed to create Tokio runtime");
-                    rt.block_on(async move {
-                        let result = fut.await;
-                        let mut state = state_clone.lock().unwrap();
-                        state.result = Some(result);
-                        for w in state.wakers.drain(..) {
-                            w.wake();
-                        }
-                    });
-                });
-            }
+
+            // Get the current runtime handle.
+            // This will panic if not polled from within an active Tokio runtime,
+            // which is now the intended behavior for the library's async types.
+            let handle = Handle::current();
+
+            handle.spawn(async move {
+                let result = fut.await;
+                let mut state = state_clone.lock().unwrap();
+                state.result = Some(result);
+                for w in state.wakers.drain(..) {
+                    w.wake();
+                }
+            });
         }
     }
 }
@@ -278,8 +270,8 @@ mod blob_task_tests {
             task_utils::wait_for_millis(10).await;
             return 123;
         })
-        .to_blob_task()
-        .await;
+            .to_blob_task()
+            .await;
 
         assert_eq!(result, 123);
     }

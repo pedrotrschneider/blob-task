@@ -1,9 +1,9 @@
-// timeout.rs
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::time::{Sleep, sleep};
+use pin_project_lite::pin_project;
 
 /// Error type returned when a timeout occurs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,13 +17,19 @@ impl std::fmt::Display for TimeoutError {
 
 impl std::error::Error for TimeoutError {}
 
-/// A future that completes with an error if the inner future doesn't complete within the timeout.
-pub struct Timeout<F>
-where
-    F: Future,
-{
-    future: Pin<Box<F>>,
-    delay: Pin<Box<Sleep>>,
+pin_project! {
+    /// A future that completes with an error if the inner future doesn't complete within the timeout.
+    /// This is a zero-allocation implementation.
+    #[must_use = "futures do nothing unless you .await or poll them"]
+    pub struct Timeout<F>
+    where
+        F: Future,
+    {
+        #[pin]
+        future: F,
+        #[pin]
+        delay: Sleep,
+    }
 }
 
 impl<F> Timeout<F>
@@ -33,8 +39,8 @@ where
     /// Creates a new timeout future
     pub fn new(future: F, duration: Duration) -> Self {
         return Self {
-            future: Box::pin(future),
-            delay: Box::pin(sleep(duration)),
+            future,
+            delay: sleep(duration),
         };
     }
 
@@ -57,15 +63,17 @@ where
 {
     type Output = Result<F::Output, TimeoutError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+
         // Try to poll the inner future first
-        match self.future.as_mut().poll(cx) {
+        match this.future.poll(cx) {
             Poll::Ready(value) => return Poll::Ready(Ok(value)),
             Poll::Pending => {}
         }
 
         // Check if timeout has elapsed
-        return match self.delay.as_mut().poll(cx) {
+        return match this.delay.poll(cx) {
             Poll::Ready(_) => Poll::Ready(Err(TimeoutError)),
             Poll::Pending => Poll::Pending,
         };
@@ -108,8 +116,8 @@ mod tests {
             task_utils::wait_for_millis(50).await;
             return 42;
         }
-        .timeout(Duration::from_millis(100))
-        .await;
+            .timeout(Duration::from_millis(100))
+            .await;
 
         assert_eq!(result, Ok(42));
     }
@@ -120,8 +128,8 @@ mod tests {
             task_utils::wait_for_millis(200).await;
             return 42;
         }
-        .timeout(Duration::from_millis(50))
-        .await;
+            .timeout(Duration::from_millis(50))
+            .await;
 
         assert_eq!(result, Err(TimeoutError));
     }
@@ -132,8 +140,8 @@ mod tests {
             task_utils::wait_for_millis(50).await;
             return "success";
         }
-        .timeout_millis(100)
-        .await;
+            .timeout_millis(100)
+            .await;
 
         assert_eq!(result, Ok("success"));
     }
@@ -144,8 +152,8 @@ mod tests {
             task_utils::wait_for_millis(50).await;
             return true;
         }
-        .timeout_seconds(1)
-        .await;
+            .timeout_seconds(1)
+            .await;
 
         assert_eq!(result, Ok(true));
     }
@@ -156,8 +164,8 @@ mod tests {
             task_utils::wait_for_millis(50).await;
             return 99;
         })
-        .timeout(Duration::from_millis(200))
-        .await;
+            .timeout(Duration::from_millis(200))
+            .await;
 
         assert_eq!(result, Ok(99));
     }
@@ -168,8 +176,8 @@ mod tests {
             task_utils::wait_for_millis(200).await;
             return 99;
         })
-        .timeout(Duration::from_millis(50))
-        .await;
+            .timeout(Duration::from_millis(50))
+            .await;
 
         assert_eq!(result, Err(TimeoutError));
     }
@@ -205,8 +213,8 @@ mod tests {
             task_utils::wait_for_millis(200).await;
             return 42;
         }
-        .timeout(Duration::from_millis(100))
-        .await;
+            .timeout(Duration::from_millis(100))
+            .await;
 
         let elapsed = start.elapsed();
 
@@ -230,7 +238,7 @@ mod tests {
                 name: String::from("test"),
             }
         })
-        .await;
+            .await;
 
         assert!(result.is_ok());
         let data = result.unwrap();
@@ -258,8 +266,8 @@ mod tests {
             task_utils::wait_for_millis(10).await;
             return 42;
         }
-        .timeout(Duration::from_millis(0))
-        .await;
+            .timeout(Duration::from_millis(0))
+            .await;
 
         // Should time out immediately
         assert_eq!(result, Err(TimeoutError));
@@ -285,8 +293,8 @@ mod tests {
             task_utils::wait_for_millis(30).await;
             return 100;
         })
-        .timeout_millis(50)
-        .await;
+            .timeout_millis(50)
+            .await;
 
         assert_eq!(result, Ok(100));
 
@@ -308,8 +316,8 @@ mod tests {
                 _ = task_utils::wait_for_millis(300) => "completed",
             }
         }
-        .timeout(Duration::from_millis(200))
-        .await;
+            .timeout(Duration::from_millis(200))
+            .await;
 
         // Should time out before completion
         assert_eq!(result, Err(TimeoutError));
@@ -378,8 +386,8 @@ mod tests {
                 "fast"
             },
         )
-        .timeout_millis(300)
-        .await;
+            .timeout_millis(300)
+            .await;
 
         assert!(result.is_ok());
         let when_any_result = result.unwrap();
